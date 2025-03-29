@@ -12,3 +12,5 @@ docker exec -it api_web_leech_truyen_audio bash
 python -m venv .venv
 
 .venv\Scripts\activate
+
+taskkill /F /IM python.exe

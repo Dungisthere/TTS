@@ -1,5 +1,5 @@
 from pydantic import BaseModel
+from typing import Optional
 
-# Định nghĩa dữ liệu đầu vào
 class TTSRequest(BaseModel):
     text: str
