@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean
+from sqlalchemy import Column, Integer, String, Boolean, BigInteger
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
 from app.database.connection import Base
@@ -10,7 +10,7 @@ class User(Base):
     username = Column(String(50), nullable=False)
     password = Column(String(255), nullable=False)
     email = Column(String(100), unique=True, nullable=False)
-    credits = Column(Integer, default=0)
+    credits = Column(BigInteger, default=0)
     usertype = Column(String(20), default="user")
     active = Column(Boolean, default=True)
 
@@ -44,4 +44,16 @@ class UserLogin(BaseModel):
     password: str
 
 class ChangeStatusRequest(BaseModel):
-    active: bool 
+    active: bool
+
+class AddCreditsRequest(BaseModel):
+    amount: int
+
+class DeductCreditsRequest(BaseModel):
+    amount: int
+
+class ChangeUserTypeRequest(BaseModel):
+    usertype: str
+
+class SearchUserRequest(BaseModel):
+    keyword: str 
