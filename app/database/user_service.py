@@ -1,15 +1,15 @@
 from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List, Optional, Dict, Any
-from datetime import timedelta
 
 from app.models.user import UserCreate, UserUpdate, User
 from app.database.user_crud import (
     create_user, get_users, get_user_by_id, update_user,
     delete_user, get_user_by_username, get_user_by_email,
-    change_user_status
+    change_user_status, add_credits, deduct_credits, change_user_type,
+    search_users
 )
-from app.database.auth import authenticate_user, create_access_token, ACCESS_TOKEN_EXPIRE_MINUTES
+from app.database.auth import authenticate_user
 
 # Service đăng ký tài khoản
 def register_user_service(user: UserCreate, db: Session):
@@ -33,7 +33,7 @@ def register_user_service(user: UserCreate, db: Session):
     return create_user(db=db, user=user)
 
 # Service đăng nhập
-def login_service(username: str, password: str, db: Session) -> bool:
+def login_service(username: str, password: str, db: Session):
     user = authenticate_user(db, username, password)
     if not user:
         raise HTTPException(
@@ -42,8 +42,15 @@ def login_service(username: str, password: str, db: Session) -> bool:
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-    # Không tạo token nữa, chỉ trả về True
-    return True
+    # Trả về thông tin của user
+    return {
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "credits": user.credits,
+        "usertype": user.usertype,
+        "active": user.active
+    }
 
 # Service lấy danh sách user
 def get_users_service(skip: int = 0, limit: int = 100, db: Session = None) -> List[User]:
@@ -66,26 +73,7 @@ def update_user_service(
     current_user: User,
     db: Session
 ) -> User:
-    # Chỉ admin hoặc chủ tài khoản mới được cập nhật
-    if current_user.usertype != "admin" and current_user.id != user_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Không đủ quyền để thực hiện thao tác này"
-        )
-    
-    # Chỉ admin mới được cập nhật usertype
-    if current_user.usertype != "admin" and user_update.usertype is not None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Chỉ admin mới được cập nhật loại tài khoản"
-        )
-    
-    # Chỉ admin mới được cập nhật credits
-    if current_user.usertype != "admin" and user_update.credits is not None:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Chỉ admin mới được cập nhật số dư credits"
-        )
+    # Loại bỏ các kiểm tra quyền, cho phép tất cả các thao tác
     
     updated_user = update_user(db, user_id, user_update)
     if updated_user is None:
@@ -97,12 +85,7 @@ def update_user_service(
 
 # Service xóa tài khoản
 def delete_user_service(user_id: int, current_user: User, db: Session) -> Dict[str, str]:
-    # Không thể xóa tài khoản của chính mình
-    if current_user.id == user_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Không thể xóa tài khoản của chính mình"
-        )
+    # Loại bỏ kiểm tra xóa tài khoản của chính mình
     
     success = delete_user(db, user_id)
     if not success:
@@ -119,12 +102,7 @@ def change_user_status_service(
     current_user: User,
     db: Session
 ) -> User:
-    # Không thể vô hiệu hóa tài khoản của chính mình
-    if current_user.id == user_id and not is_active:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Không thể vô hiệu hóa tài khoản của chính mình"
-        )
+    # Loại bỏ kiểm tra vô hiệu hóa tài khoản của chính mình
     
     updated_user = change_user_status(db, user_id, is_active)
     if updated_user is None:
@@ -132,4 +110,82 @@ def change_user_status_service(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Không tìm thấy tài khoản"
         )
-    return updated_user 
+    return updated_user
+
+# Service nạp tiền
+def add_credits_service(
+    user_id: int,
+    amount: int,
+    current_user: User,
+    db: Session
+) -> User:
+    # Kiểm tra số tiền nạp
+    if amount <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Số tiền nạp phải lớn hơn 0"
+        )
+    
+    updated_user = add_credits(db, user_id, amount)
+    if updated_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Không tìm thấy tài khoản"
+        )
+    return updated_user
+
+# Service trừ tiền
+def deduct_credits_service(
+    user_id: int,
+    amount: int,
+    current_user: User,
+    db: Session
+) -> User:
+    # Kiểm tra số tiền trừ
+    if amount <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Số tiền trừ phải lớn hơn 0"
+        )
+    
+    updated_user = deduct_credits(db, user_id, amount)
+    if updated_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Không tìm thấy tài khoản hoặc số dư không đủ"
+        )
+    return updated_user
+
+# Service thay đổi loại tài khoản
+def change_user_type_service(
+    user_id: int,
+    usertype: str,
+    current_user: User,
+    db: Session
+) -> User:
+    # Kiểm tra loại tài khoản hợp lệ
+    valid_user_types = ["user", "admin"]
+    if usertype not in valid_user_types:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Loại tài khoản không hợp lệ. Chỉ chấp nhận: {', '.join(valid_user_types)}"
+        )
+    
+    # Loại bỏ kiểm tra quyền hạn của current_user
+    
+    updated_user = change_user_type(db, user_id, usertype)
+    if updated_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Không tìm thấy tài khoản"
+        )
+    return updated_user
+
+# Service tìm kiếm user
+def search_users_service(
+    keyword: str,
+    skip: int = 0,
+    limit: int = 100,
+    db: Session = None
+) -> List[User]:
+    return search_users(db, keyword, skip=skip, limit=limit) 
