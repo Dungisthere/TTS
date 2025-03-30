@@ -81,4 +81,47 @@ def delete_user(db: Session, user_id: int) -> bool:
     
     db.delete(db_user)
     db.commit()
-    return True 
+    return True
+
+# Nạp tiền cho user
+def add_credits(db: Session, user_id: int, amount: int) -> Optional[User]:
+    db_user = get_user_by_id(db, user_id)
+    if not db_user:
+        return None
+    
+    db_user.credits += amount
+    db.commit()
+    db.refresh(db_user)
+    return db_user
+
+# Trừ tiền của user
+def deduct_credits(db: Session, user_id: int, amount: int) -> Optional[User]:
+    db_user = get_user_by_id(db, user_id)
+    if not db_user:
+        return None
+    
+    if db_user.credits < amount:
+        return None  # Không đủ số dư
+    
+    db_user.credits -= amount
+    db.commit()
+    db.refresh(db_user)
+    return db_user
+
+# Thay đổi loại tài khoản
+def change_user_type(db: Session, user_id: int, usertype: str) -> Optional[User]:
+    db_user = get_user_by_id(db, user_id)
+    if not db_user:
+        return None
+    
+    db_user.usertype = usertype
+    db.commit()
+    db.refresh(db_user)
+    return db_user
+
+# Tìm kiếm user
+def search_users(db: Session, keyword: str, skip: int = 0, limit: int = 100) -> List[User]:
+    return db.query(User).filter(
+        (User.username.ilike(f"%{keyword}%")) | 
+        (User.email.ilike(f"%{keyword}%"))
+    ).offset(skip).limit(limit).all() 
