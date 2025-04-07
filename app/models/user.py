@@ -1,7 +1,8 @@
 from sqlalchemy import Column, Integer, String, Boolean, BigInteger
 from pydantic import BaseModel, EmailStr, Field
-from typing import Optional
+from typing import Optional, List
 from app.database.connection import Base
+from sqlalchemy.orm import relationship
 
 class User(Base):
     __tablename__ = "users"
@@ -13,6 +14,9 @@ class User(Base):
     credits = Column(BigInteger, default=0)
     usertype = Column(String(20), default="user")
     active = Column(Boolean, default=True)
+    
+    # Relationship với Voice Profiles
+    voice_profiles = relationship("VoiceProfile", back_populates="user", cascade="all, delete")
 
 # Pydantic models for API
 class UserBase(BaseModel):
@@ -37,7 +41,7 @@ class UserResponse(UserBase):
     active: bool
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class UserLogin(BaseModel):
     username: str

@@ -1,5 +1,7 @@
 from fastapi import FastAPI, Depends
-from app.routers import base, file_upload, users, tts_facebook, config
+from app.routers import base, file_upload, users, config
+# Khôi phục import tts_facebook
+from app.routers import tts_facebook, voice_library
 from fastapi.middleware.cors import CORSMiddleware
 from app.database.init_db import init_db
 from app.database.connection import get_db
@@ -29,8 +31,10 @@ async def startup_event():
 app.include_router(file_upload.router)
 # app.include_router(text_to_speech.router)
 app.include_router(users.router)
+# Khôi phục router tts_facebook
 app.include_router(tts_facebook.router)
 app.include_router(config.router)
+app.include_router(voice_library.router)
 
 
 # @app.route("/favicon.ico")

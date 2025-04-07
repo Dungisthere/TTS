@@ -188,4 +188,17 @@ def search_users_service(
     limit: int = 100,
     db: Session = None
 ) -> List[User]:
-    return search_users(db, keyword, skip=skip, limit=limit) 
+    return search_users(db, keyword, skip=skip, limit=limit)
+
+# Hàm helper để lấy user theo id hoặc trả về 404
+def get_user_by_id_or_404(user_id: int, db: Session) -> User:
+    """
+    Lấy user theo ID, nếu không tìm thấy thì raise HTTP 404 exception
+    """
+    user = get_user_by_id(db, user_id=user_id)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Không tìm thấy người dùng với ID: {user_id}"
+        )
+    return user 
