@@ -568,9 +568,50 @@ def validate_and_fix_audio_file(file_path, force_convert=False):
             print(f"Không thể đọc file bằng librosa: {str(e1)}")
             # Thử phương pháp khác - ví dụ sử dụng subprocess gọi ffmpeg
             try:
-                import subprocess
-                cmd = ['ffmpeg', '-y', '-i', file_path, '-acodec', 'pcm_s16le', temp_path]
-                subprocess.run(cmd, check=True, capture_output=True)
+                # Danh sách các đường dẫn ffmpeg có thể có
+                ffmpeg_paths = [
+                    'ffmpeg',  # Nếu ffmpeg trong PATH
+                    os.path.join(os.environ.get('PROGRAMFILES', 'C:\\Program Files'), 'ffmpeg', 'bin', 'ffmpeg.exe'),
+                    os.path.join(os.environ.get('PROGRAMFILES(X86)', 'C:\\Program Files (x86)'), 'ffmpeg', 'bin', 'ffmpeg.exe'),
+                    'C:\\ffmpeg\\bin\\ffmpeg.exe',
+                    os.path.expanduser('~\\ffmpeg\\bin\\ffmpeg.exe')
+                ]
+                
+                # Thử từng đường dẫn cho đến khi tìm được ffmpeg
+                ffmpeg_found = False
+                error_messages = []
+                
+                for ffmpeg_path in ffmpeg_paths:
+                    try:
+                        print(f"Thử đường dẫn ffmpeg: {ffmpeg_path}")
+                        # Sử dụng ffmpeg để convert
+                        cmd = [ffmpeg_path, '-y', '-i', file_path, '-acodec', 'pcm_s16le', temp_path]
+                        subprocess.run(cmd, check=True, capture_output=True)
+                        ffmpeg_found = True
+                        print(f"Đã tìm thấy và sử dụng ffmpeg tại: {ffmpeg_path}")
+                        break
+                    except Exception as e:
+                        error_messages.append(f"{ffmpeg_path}: {str(e)}")
+                        continue
+                
+                if not ffmpeg_found:
+                    error_detail = " | ".join(error_messages)
+                    print(f"Không tìm thấy ffmpeg trực tiếp: {error_detail}")
+                    print("Thử sử dụng thư viện ffmpeg-python...")
+                    try:
+                        # Đường dẫn tuyệt đối
+                        file_path_abs = os.path.abspath(file_path)
+                        temp_path_abs = os.path.abspath(temp_path)
+                        # Sử dụng ffmpeg-python thay vì gọi subprocess
+                        import ffmpeg
+                        stream = ffmpeg.input(file_path_abs)
+                        stream = ffmpeg.output(stream, temp_path_abs, acodec='pcm_s16le', y=None)
+                        ffmpeg.run(stream, capture_stdout=True, capture_stderr=True)
+                        ffmpeg_found = True
+                        print(f"Đã chuyển đổi file bằng ffmpeg-python thành công")
+                    except Exception as e:
+                        print(f"Lỗi khi sử dụng ffmpeg-python: {str(e)}")
+                        raise ValueError(f"Không thể sử dụng ffmpeg: {error_detail} | ffmpeg-python: {str(e)}")
                 
                 # Kiểm tra file đã tạo
                 if not os.path.exists(temp_path) or os.path.getsize(temp_path) == 0:

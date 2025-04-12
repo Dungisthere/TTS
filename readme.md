@@ -14,3 +14,5 @@ python -m venv .venv
 .venv\Scripts\activate
 
 taskkill /F /IM python.exe
+
+.\.venv\Scripts\Activate.ps1

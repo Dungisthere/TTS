@@ -12,6 +12,7 @@ from app.models.voice_library.schemas import (
     VocabularyResponse, VocabularyCreate, VocabularyDelete,
     VoiceProfileWithVocabularies, TextToSpeechRequest
 )
+from app.models.voice_library.vocabulary import Vocabulary, VoiceProfile
 from app.database.voice_service import (
     create_voice_profile, get_voice_profiles_by_user_id, get_voice_profile_by_id,
     update_voice_profile, delete_voice_profile, add_vocabulary,
