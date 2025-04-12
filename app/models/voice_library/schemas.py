@@ -40,7 +40,7 @@ class VocabularyResponse(BaseModel):
     message: Optional[str] = None
 
     class Config:
-        orm_mode = True
+        from_attributes = True
 
 class VocabularyDelete(BaseModel):
     word: str

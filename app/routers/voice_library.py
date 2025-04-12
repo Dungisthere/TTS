@@ -50,17 +50,46 @@ async def get_profile(
     profile = get_voice_profile_by_id(profile_id, user_id, db)
     vocabularies = get_vocabularies(profile_id, user_id, db)
     
-    # Tạo response với vocabularies
-    response = VoiceProfileWithVocabularies(
-        id=profile.id,
-        user_id=profile.user_id,
-        name=profile.name,
-        description=profile.description,
-        created_at=profile.created_at,
-        updated_at=profile.updated_at,
-        vocabularies=vocabularies
-    )
-    return response
+    # Tạo response với vocabularies - xử lý an toàn hơn
+    try:
+        # Chuyển đổi dữ liệu Vocabulary sang định dạng dict trước khi tạo Pydantic model
+        vocab_list = []
+        for vocab in vocabularies:
+            vocab_dict = {
+                "id": vocab.id,
+                "voice_profile_id": vocab.voice_profile_id,
+                "word": vocab.word,
+                "audio_path": vocab.audio_path,
+                "created_at": vocab.created_at,
+                "updated_at": vocab.updated_at,
+                "exists": False,
+                "message": None
+            }
+            vocab_list.append(vocab_dict)
+        
+        response = VoiceProfileWithVocabularies(
+            id=profile.id,
+            user_id=profile.user_id,
+            name=profile.name,
+            description=profile.description,
+            created_at=profile.created_at,
+            updated_at=profile.updated_at,
+            vocabularies=vocab_list
+        )
+        return response
+    except Exception as e:
+        # Log và xử lý nếu có lỗi
+        print(f"Lỗi khi chuyển đổi dữ liệu: {str(e)}")
+        # Trả về profile mà không có từ vựng trong trường hợp lỗi
+        return VoiceProfileWithVocabularies(
+            id=profile.id,
+            user_id=profile.user_id,
+            name=profile.name,
+            description=profile.description,
+            created_at=profile.created_at,
+            updated_at=profile.updated_at,
+            vocabularies=[]
+        )
 
 @router.put("/profiles/{profile_id}", response_model=VoiceProfileResponse)
 async def update_profile(
@@ -135,7 +164,32 @@ async def get_vocabs(
     db: Session = Depends(get_db)
 ):
     """Lấy danh sách từ vựng của profile"""
-    return get_vocabularies(profile_id, user_id, db)
+    try:
+        # Lấy danh sách từ vựng
+        vocabularies = get_vocabularies(profile_id, user_id, db)
+        
+        # Chuyển đổi sang định dạng dict để tránh lỗi validation
+        result = []
+        for vocab in vocabularies:
+            vocab_dict = {
+                "id": vocab.id,
+                "voice_profile_id": vocab.voice_profile_id,
+                "word": vocab.word,
+                "audio_path": vocab.audio_path,
+                "created_at": vocab.created_at,
+                "updated_at": vocab.updated_at,
+                "exists": False,
+                "message": None
+            }
+            result.append(vocab_dict)
+        
+        return result
+    except Exception as e:
+        print(f"Lỗi khi lấy danh sách từ vựng: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Lỗi khi lấy danh sách từ vựng: {str(e)}"
+        )
 
 @router.get("/profiles/{profile_id}/vocabulary/{word}", response_model=VocabularyResponse)
 async def get_vocab(
@@ -145,7 +199,29 @@ async def get_vocab(
     db: Session = Depends(get_db)
 ):
     """Lấy thông tin một từ vựng cụ thể"""
-    return get_vocabulary(profile_id, user_id, word, db)
+    try:
+        vocab = get_vocabulary(profile_id, user_id, word, db)
+        
+        # Chuyển đổi sang dict để đảm bảo tương thích với VocabularyResponse
+        return {
+            "id": vocab.id,
+            "voice_profile_id": vocab.voice_profile_id,
+            "word": vocab.word,
+            "audio_path": vocab.audio_path,
+            "created_at": vocab.created_at,
+            "updated_at": vocab.updated_at,
+            "exists": False,
+            "message": None
+        }
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        print(f"Lỗi khi lấy từ vựng: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Lỗi khi lấy từ vựng: {str(e)}"
+        )
 
 @router.delete("/profiles/{profile_id}/vocabulary", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_vocab(
