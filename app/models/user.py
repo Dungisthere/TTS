@@ -59,5 +59,8 @@ class DeductCreditsRequest(BaseModel):
 class ChangeUserTypeRequest(BaseModel):
     usertype: str
 
+class ResetPasswordRequest(BaseModel):
+    new_password: str
+
 class SearchUserRequest(BaseModel):
     keyword: str 

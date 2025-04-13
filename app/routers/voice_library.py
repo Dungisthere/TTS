@@ -1,10 +1,13 @@
+import os
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, status
 from sqlalchemy.orm import Session
 from typing import List, Optional
 import os
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pathlib import Path
 import shutil
+import json
+from datetime import datetime
 
 from app.database.connection import get_db
 from app.models.voice_library.schemas import (
@@ -17,8 +20,11 @@ from app.database.voice_service import (
     create_voice_profile, get_voice_profiles_by_user_id, get_voice_profile_by_id,
     update_voice_profile, delete_voice_profile, add_vocabulary,
     get_vocabularies, get_vocabulary, delete_vocabulary, text_to_speech,
-    validate_and_fix_audio_file, process_audio_for_vocabulary
+    validate_and_fix_audio_file, process_audio_for_vocabulary, count_vocabularies
 )
+
+# Định nghĩa đường dẫn thư mục lưu trữ profile
+VOICE_PROFILES_DIR = Path(os.environ.get('VOICE_PROFILES_DIR', 'data/voice_profiles'))
 
 router = APIRouter(prefix="/voice-library", tags=["voice-library"])
 
@@ -60,8 +66,8 @@ async def get_profile(
                 "voice_profile_id": vocab.voice_profile_id,
                 "word": vocab.word,
                 "audio_path": vocab.audio_path,
-                "created_at": vocab.created_at,
-                "updated_at": vocab.updated_at,
+                "created_at": vocab.created_at.isoformat() if vocab.created_at else None,
+                "updated_at": vocab.updated_at.isoformat() if vocab.updated_at else None,
                 "exists": False,
                 "message": None
             }
@@ -72,8 +78,8 @@ async def get_profile(
             user_id=profile.user_id,
             name=profile.name,
             description=profile.description,
-            created_at=profile.created_at,
-            updated_at=profile.updated_at,
+            created_at=profile.created_at.isoformat() if profile.created_at else None,
+            updated_at=profile.updated_at.isoformat() if profile.updated_at else None,
             vocabularies=vocab_list
         )
         return response
@@ -86,8 +92,8 @@ async def get_profile(
             user_id=profile.user_id,
             name=profile.name,
             description=profile.description,
-            created_at=profile.created_at,
-            updated_at=profile.updated_at,
+            created_at=profile.created_at.isoformat() if profile.created_at else None,
+            updated_at=profile.updated_at.isoformat() if profile.updated_at else None,
             vocabularies=[]
         )
 
@@ -161,12 +167,24 @@ async def add_vocab(
 async def get_vocabs(
     profile_id: int,
     user_id: int,
+    skip: int = 0,
+    limit: int = 100,
     db: Session = Depends(get_db)
 ):
-    """Lấy danh sách từ vựng của profile"""
+    """Lấy danh sách từ vựng của profile với phân trang"""
+    # Hàm chuyển đổi đối tượng datetime thành chuỗi ISO format
+    class DateTimeEncoder(json.JSONEncoder):
+        def default(self, obj):
+            if isinstance(obj, datetime):
+                return obj.isoformat()
+            return super().default(obj)
+    
     try:
-        # Lấy danh sách từ vựng
-        vocabularies = get_vocabularies(profile_id, user_id, db)
+        # Lấy danh sách từ vựng với phân trang
+        vocabularies = get_vocabularies(profile_id, user_id, db, skip, limit)
+        
+        # Lấy tổng số từ vựng để hỗ trợ phân trang
+        total_count = count_vocabularies(profile_id, user_id, db)
         
         # Chuyển đổi sang định dạng dict để tránh lỗi validation
         result = []
@@ -176,14 +194,19 @@ async def get_vocabs(
                 "voice_profile_id": vocab.voice_profile_id,
                 "word": vocab.word,
                 "audio_path": vocab.audio_path,
-                "created_at": vocab.created_at,
-                "updated_at": vocab.updated_at,
+                "created_at": vocab.created_at.isoformat() if vocab.created_at else None,
+                "updated_at": vocab.updated_at.isoformat() if vocab.updated_at else None,
                 "exists": False,
                 "message": None
             }
             result.append(vocab_dict)
         
-        return result
+        # Tạo response với headers chứa thông tin phân trang
+        response = JSONResponse(content=result)
+        response.headers["X-Total-Count"] = str(total_count) 
+        response.headers["Access-Control-Expose-Headers"] = "X-Total-Count, Content-Range"
+        response.headers["Content-Range"] = f"items {skip}-{skip+len(result)}/{total_count}"
+        return response
     except Exception as e:
         print(f"Lỗi khi lấy danh sách từ vựng: {str(e)}")
         raise HTTPException(
@@ -208,8 +231,8 @@ async def get_vocab(
             "voice_profile_id": vocab.voice_profile_id,
             "word": vocab.word,
             "audio_path": vocab.audio_path,
-            "created_at": vocab.created_at,
-            "updated_at": vocab.updated_at,
+            "created_at": vocab.created_at.isoformat() if vocab.created_at else None,
+            "updated_at": vocab.updated_at.isoformat() if vocab.updated_at else None,
             "exists": False,
             "message": None
         }
@@ -415,4 +438,145 @@ def reprocess_audio(
         raise HTTPException(
             status_code=500,
             detail=f"Lỗi khi xử lý lại file audio: {str(e)}"
+        )
+
+@router.post("/profiles/{profile_id}/sync-vocabulary", response_model=dict)
+async def sync_vocabulary(
+    profile_id: int,
+    user_id: int,
+    db: Session = Depends(get_db)
+):
+    """Đồng bộ hóa từ vựng với file audio trong thư mục"""
+    import os
+    from pathlib import Path
+    
+    try:
+        # Kiểm tra profile tồn tại
+        profile = get_voice_profile_by_id(profile_id, user_id, db)
+        
+        # Lấy tất cả từ vựng trong database
+        vocab_db = db.query(Vocabulary).filter(Vocabulary.voice_profile_id == profile_id).all()
+        vocab_words = {vocab.word.lower().strip(): vocab for vocab in vocab_db}
+        
+        # Tìm thư mục chứa file audio
+        profile_dir = VOICE_PROFILES_DIR / f"user_{user_id}" / f"profile_{profile_id}"
+        
+        # In ra đường dẫn thư mục để debug
+        print(f"Đang tìm kiếm file audio trong thư mục: {profile_dir}")
+        
+        # Nếu thư mục không tồn tại, tạo mới
+        if not profile_dir.exists():
+            profile_dir.mkdir(parents=True, exist_ok=True)
+            return {
+                "status": "success",
+                "message": "Thư mục không tồn tại, đã tạo mới",
+                "total_files": 0,
+                "total_records": len(vocab_db),
+                "missing_files": [],
+                "missing_records": [],
+                "debug_info": []
+            }
+        
+        # Kiểm tra thư mục có thể truy cập được không
+        try:
+            all_files = os.listdir(profile_dir)
+            print(f"Đọc được {len(all_files)} file trong thư mục")
+        except PermissionError:
+            print(f"Lỗi quyền truy cập: Không thể đọc thư mục {profile_dir}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Không thể đọc thư mục {profile_dir} do không đủ quyền truy cập"
+            )
+        except Exception as e:
+            print(f"Lỗi khi đọc thư mục: {str(e)}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Không thể đọc thư mục: {str(e)}"
+            )
+        
+        # Lấy danh sách file audio (mở rộng danh sách định dạng hỗ trợ)
+        supported_extensions = ('.wav', '.mp3', '.ogg', '.m4a', '.aac', '.flac')
+        audio_files = [f for f in os.listdir(profile_dir) if f.lower().endswith(supported_extensions)]
+        
+        # Thông tin debug
+        debug_info = {
+            "all_files": os.listdir(profile_dir),
+            "filtered_audio_files": audio_files,
+            "db_words": list(vocab_words.keys())
+        }
+        
+        # Lưu trữ các file trùng lặp
+        duplicate_check = {}
+        duplicate_files = []
+        
+        # Tìm các file audio trùng lặp
+        for audio_file in audio_files:
+            word = os.path.splitext(audio_file)[0].lower().strip()
+            
+            if word in duplicate_check:
+                duplicate_check[word].append(audio_file)
+                duplicate_files.append(audio_file)
+            else:
+                duplicate_check[word] = [audio_file]
+        
+        # Tìm các file không có bản ghi database
+        missing_records = []
+        unique_words = set()
+        
+        for audio_file in audio_files:
+            # Bỏ qua file trùng lặp thứ 2 trở đi
+            if audio_file in duplicate_files and duplicate_check[os.path.splitext(audio_file)[0].lower().strip()][0] != audio_file:
+                continue
+                
+            word = os.path.splitext(audio_file)[0].lower().strip()
+            unique_words.add(word)
+            
+            if word not in vocab_words:
+                # Tạo bản ghi mới
+                file_path = str(profile_dir / audio_file)
+                new_vocab = Vocabulary(
+                    voice_profile_id=profile_id,
+                    word=word,
+                    audio_path=file_path
+                )
+                db.add(new_vocab)
+                missing_records.append(word)
+        
+        # Tìm các bản ghi không có file audio
+        missing_files = []
+        for word, vocab in vocab_words.items():
+            normalized_word = word.lower().strip()
+            if normalized_word not in unique_words:
+                missing_files.append(word)
+        
+        # Lưu thay đổi
+        db.commit()
+        
+        # Cập nhật lại vocab_db sau khi thêm bản ghi mới
+        vocab_db = db.query(Vocabulary).filter(Vocabulary.voice_profile_id == profile_id).all()
+        
+        return {
+            "status": "success",
+            "message": "Đã đồng bộ hóa dữ liệu",
+            "total_files": len(audio_files),
+            "unique_files": len(unique_words),
+            "duplicate_files": len(duplicate_files),
+            "total_records": len(vocab_db),
+            "added_records": missing_records,
+            "missing_files": missing_files,
+            "debug_info": debug_info
+        }
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions
+        raise
+    except Exception as e:
+        db.rollback()
+        print(f"Lỗi khi đồng bộ từ vựng: {str(e)}")
+        import traceback
+        traceback.print_exc()  # In ra stack trace đầy đủ
+        
+        raise HTTPException(
+            status_code=500,
+            detail=f"Lỗi khi đồng bộ từ vựng: {str(e)}"
         ) 

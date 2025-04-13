@@ -28,14 +28,36 @@ from app.models.voice_library.vocabulary import VoiceProfile, Vocabulary
 from app.models.voice_library.schemas import VoiceProfileCreate, VoiceProfileUpdate
 from app.database.user_service import get_user_by_id_or_404
 
-# Đường dẫn lưu trữ file audio
-AUDIO_UPLOAD_DIR = Path("audio_uploads")
-VOICE_PROFILES_DIR = AUDIO_UPLOAD_DIR / "voice_profiles"
-TEMP_DIR = Path("audio_uploads/temp")  # Thư mục lưu trữ file tạm thời
+# Thư mục lưu trữ tạm cho các file âm thanh xử lý
+TEMP_DIR = os.environ.get('AUDIO_TEMP_DIR', 'app/temp/audio')
+os.makedirs(TEMP_DIR, exist_ok=True)
 
-# Đảm bảo thư mục tồn tại
-VOICE_PROFILES_DIR.mkdir(parents=True, exist_ok=True)
-TEMP_DIR.mkdir(parents=True, exist_ok=True)  # Đảm bảo thư mục temp tồn tại
+# Thay đổi định nghĩa này để khớp với router/voice_library.py
+VOICE_PROFILES_DIR = Path(os.environ.get('VOICE_PROFILES_DIR', 'data/voice_profiles'))
+os.makedirs(VOICE_PROFILES_DIR, exist_ok=True)
+
+# Đảm bảo thư mục temp tồn tại và có quyền ghi
+def ensure_directories_exist():
+    directories = [
+        TEMP_DIR,
+        VOICE_PROFILES_DIR
+    ]
+    
+    for directory in directories:
+        try:
+            os.makedirs(directory, exist_ok=True)
+            print(f"Đảm bảo thư mục tồn tại: {directory}")
+            
+            # Kiểm tra quyền ghi
+            test_file = os.path.join(directory, ".write_test")
+            with open(test_file, "w") as f:
+                f.write("test")
+            os.remove(test_file)
+        except Exception as e:
+            print(f"Lỗi khi tạo hoặc kiểm tra thư mục {directory}: {str(e)}")
+
+# Gọi hàm đảm bảo thư mục khi module được import
+ensure_directories_exist()
 
 # Voice Profile Services
 def create_voice_profile(user_id: int, profile_data: VoiceProfileCreate, db: Session):
@@ -113,28 +135,52 @@ def add_vocabulary(profile_id: int, user_id: int, word: str, audio_file: UploadF
     """
     temp_path = None
     filepath = None
+    backup_path = None
     
     try:
         profile = get_voice_profile_by_id(profile_id, user_id, db)
         if not profile:
             raise HTTPException(status_code=404, detail="Voice profile not found")
 
+        # Đảm bảo word được chuẩn hóa (lowercase và loại bỏ khoảng trắng)
+        word = word.lower().strip()
+        
+        # Kiểm tra nếu word chứa ký tự không hợp lệ cho tên file
+        invalid_chars = r'[\\/*?:"<>|]'
+        if re.search(invalid_chars, word):
+            safe_word = re.sub(invalid_chars, '_', word)
+            print(f"Đã thay thế các ký tự không hợp lệ trong từ '{word}' thành '{safe_word}'")
+            word = safe_word
+
         # Lưu file audio
         file_dir = VOICE_PROFILES_DIR / f"user_{user_id}" / f"profile_{profile_id}"
         file_dir.mkdir(exist_ok=True, parents=True)
-        
-        # Đảm bảo word được chuẩn hóa (lowercase và loại bỏ khoảng trắng)
-        word = word.lower().strip()
         
         # Đảm bảo file luôn có đuôi .wav
         filepath = file_dir / f"{word}.wav"
         temp_path = filepath.with_suffix('.temp')
         
+        # Tạo backup nếu file đã tồn tại
+        if os.path.exists(filepath):
+            backup_path = filepath.with_suffix('.backup')
+            shutil.copy2(filepath, backup_path)
+            print(f"Đã tạo backup cho file: {filepath}")
+        
         # Lưu file tạm trước để kiểm tra
-        with open(temp_path, "wb") as buffer:
-            shutil.copyfileobj(audio_file.file, buffer)
+        try:
+            with open(temp_path, "wb") as buffer:
+                shutil.copyfileobj(audio_file.file, buffer)
+                
+            # Kiểm tra file rỗng
+            if os.path.getsize(temp_path) == 0:
+                raise HTTPException(status_code=400, detail="File âm thanh rỗng")
+                
+        except Exception as e:
+            print(f"Lỗi khi lưu file tạm: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Lỗi khi lưu file tạm: {str(e)}")
         
         # Sử dụng hàm validate_and_fix_audio_file để xử lý file audio
+        print(f"Kiểm tra và xử lý file: {temp_path}")
         valid, error_msg = validate_and_fix_audio_file(str(temp_path), force_convert=True)
         if not valid:
             raise HTTPException(
@@ -143,11 +189,28 @@ def add_vocabulary(profile_id: int, user_id: int, word: str, audio_file: UploadF
             )
             
         # Nếu valid, di chuyển từ temp_path sang filepath
-        os.replace(str(temp_path), str(filepath))
+        try:
+            os.replace(str(temp_path), str(filepath))
+            print(f"Đã lưu file audio: {filepath}")
+        except Exception as e:
+            print(f"Lỗi khi di chuyển file: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Lỗi khi di chuyển file: {str(e)}")
         
         # Xử lý nâng cao cho file âm thanh
         print(f"Đang xử lý nâng cao cho file: {str(filepath)}")
-        process_audio_for_vocabulary(str(filepath))
+        try:
+            process_audio_for_vocabulary(str(filepath))
+        except Exception as e:
+            print(f"Lỗi khi xử lý nâng cao âm thanh: {str(e)}")
+            # Khôi phục từ backup nếu có
+            if backup_path and os.path.exists(str(backup_path)):
+                shutil.copy2(str(backup_path), str(filepath))
+                os.remove(str(backup_path))
+            raise HTTPException(status_code=500, detail=f"Lỗi khi xử lý nâng cao âm thanh: {str(e)}")
+        
+        # Xóa backup nếu đã xử lý thành công
+        if backup_path and os.path.exists(str(backup_path)):
+            os.remove(str(backup_path))
         
         # Tạo hoặc cập nhật record trong database
         vocab = get_vocabulary_by_word(profile_id, user_id, word, db)
@@ -166,28 +229,46 @@ def add_vocabulary(profile_id: int, user_id: int, word: str, audio_file: UploadF
             db.refresh(db_vocab)
             return db_vocab
             
-    except HTTPException:
+    except HTTPException as he:
         # Dọn dẹp nếu có lỗi
         if temp_path and os.path.exists(str(temp_path)):
-            os.remove(str(temp_path))
-        raise
+            try:
+                os.remove(str(temp_path))
+            except:
+                pass
+        raise he
         
     except Exception as e:
         # Dọn dẹp nếu có lỗi
         if temp_path and os.path.exists(str(temp_path)):
-            os.remove(str(temp_path))
-        if filepath and os.path.exists(str(filepath)):
-            os.remove(str(filepath))
+            try:
+                os.remove(str(temp_path))
+            except:
+                pass
+                
+        if filepath and os.path.exists(str(filepath)) and not (backup_path and os.path.exists(str(backup_path))):
+            try:
+                os.remove(str(filepath))
+            except:
+                pass
+                
+        # Khôi phục từ backup nếu có
+        if backup_path and os.path.exists(str(backup_path)) and filepath:
+            try:
+                shutil.copy2(str(backup_path), str(filepath))
+                os.remove(str(backup_path))
+            except:
+                pass
             
         print(f"Lỗi khi thêm từ vựng: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Lỗi khi thêm từ vựng: {str(e)}")
 
-def get_vocabularies(profile_id: int, user_id: int, db: Session):
+def get_vocabularies(profile_id: int, user_id: int, db: Session, skip: int = 0, limit: int = 100):
     # Kiểm tra profile tồn tại
     profile = get_voice_profile_by_id(profile_id, user_id, db)
     
-    # Lấy danh sách từ vựng
-    vocabs = db.query(Vocabulary).filter(Vocabulary.voice_profile_id == profile_id).all()
+    # Lấy danh sách từ vựng với phân trang
+    vocabs = db.query(Vocabulary).filter(Vocabulary.voice_profile_id == profile_id).offset(skip).limit(limit).all()
     return vocabs
 
 def get_vocabulary(profile_id: int, user_id: int, word: str, db: Session):
@@ -219,6 +300,15 @@ def delete_vocabulary(profile_id: int, user_id: int, word: str, db: Session):
     db.commit()
     
     return True
+
+# Thêm hàm mới để đếm tổng số từ vựng
+def count_vocabularies(profile_id: int, user_id: int, db: Session):
+    # Kiểm tra profile tồn tại
+    profile = get_voice_profile_by_id(profile_id, user_id, db)
+    
+    # Đếm tổng số từ vựng
+    total = db.query(Vocabulary).filter(Vocabulary.voice_profile_id == profile_id).count()
+    return total
 
 # Text to Speech Service
 def text_to_speech(profile_id: int, user_id: int, text: str, db: Session):

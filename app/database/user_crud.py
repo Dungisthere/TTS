@@ -2,6 +2,8 @@ from sqlalchemy.orm import Session
 from passlib.context import CryptContext
 from app.models.user import User, UserCreate, UserUpdate
 from typing import List, Optional
+import random
+import string
 
 # Setup context cho việc băm mật khẩu
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -124,4 +126,48 @@ def search_users(db: Session, keyword: str, skip: int = 0, limit: int = 100) -> 
     return db.query(User).filter(
         (User.username.ilike(f"%{keyword}%")) | 
         (User.email.ilike(f"%{keyword}%"))
-    ).offset(skip).limit(limit).all() 
+    ).offset(skip).limit(limit).all()
+
+# Reset mật khẩu người dùng với mật khẩu được cung cấp
+def reset_user_password(db: Session, user_id: int, new_password: str = None):
+    # Tìm user
+    db_user = get_user_by_id(db, user_id)
+    if not db_user:
+        return None
+    
+    # Nếu không có mật khẩu mới được cung cấp, tạo mật khẩu ngẫu nhiên an toàn
+    if new_password is None:
+        # Độ dài 12 ký tự, gồm chữ hoa, chữ thường, số, ký tự đặc biệt
+        characters = string.ascii_lowercase + string.ascii_uppercase + string.digits + "!@#$%^&*"
+        password_length = 12
+        
+        # Đảm bảo mật khẩu có ít nhất 1 ký tự mỗi loại
+        new_password = random.choice(string.ascii_lowercase)  # ít nhất 1 chữ thường
+        new_password += random.choice(string.ascii_uppercase)  # ít nhất 1 chữ hoa
+        new_password += random.choice(string.digits)  # ít nhất 1 số
+        new_password += random.choice("!@#$%^&*")  # ít nhất 1 ký tự đặc biệt
+        
+        # Thêm các ký tự ngẫu nhiên cho đủ độ dài
+        while len(new_password) < password_length:
+            new_password += random.choice(characters)
+        
+        # Xáo trộn các ký tự để tăng tính ngẫu nhiên
+        new_password_list = list(new_password)
+        random.shuffle(new_password_list)
+        new_password = ''.join(new_password_list)
+        
+        # Cập nhật mật khẩu đã băm vào database
+        db_user.password = get_password_hash(new_password)
+        db.commit()
+        db.refresh(db_user)
+        
+        # Trả về cả user đã cập nhật và mật khẩu mới (chưa băm)
+        return db_user, new_password
+    
+    # Nếu có mật khẩu mới được cung cấp
+    db_user.password = get_password_hash(new_password)
+    db.commit()
+    db.refresh(db_user)
+    
+    # Trả về user đã cập nhật
+    return db_user 

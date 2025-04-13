@@ -3,13 +3,14 @@ from sqlalchemy.orm import Session
 from typing import List
 
 from app.database.connection import get_db
-from app.models.user import UserCreate, UserResponse, UserUpdate, ChangeStatusRequest, User, AddCreditsRequest, DeductCreditsRequest, ChangeUserTypeRequest, SearchUserRequest, UserLogin
+from app.models.user import UserCreate, UserResponse, UserUpdate, ChangeStatusRequest, User, AddCreditsRequest, DeductCreditsRequest, ChangeUserTypeRequest, SearchUserRequest, UserLogin, ResetPasswordRequest
 from app.database.user_service import (
     register_user_service, login_service, get_users_service,
     get_user_by_id_service, update_user_service, delete_user_service,
     change_user_status_service, add_credits_service, deduct_credits_service,
     change_user_type_service, search_users_service
 )
+from app.database.user_crud import reset_user_password
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -129,6 +130,37 @@ async def change_user_type(
     """
     # Gọi service không truyền current_user
     return change_user_type_service(user_id, usertype_request.usertype, None, db)
+
+# API Reset mật khẩu (chỉ admin)
+@router.post("/{user_id}/reset-password")
+async def reset_password(
+    user_id: int,
+    reset_data: ResetPasswordRequest,
+    db: Session = Depends(get_db)
+):
+    """
+    API reset mật khẩu người dùng - admin tự nhập mật khẩu mới
+    Chỉ dành cho admin, không yêu cầu biết mật khẩu cũ
+    """
+    # Reset mật khẩu với mật khẩu được cung cấp
+    updated_user = reset_user_password(db, user_id, reset_data.new_password)
+    
+    if not updated_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Không tìm thấy tài khoản"
+        )
+    
+    # Tạo response chứa thông tin cơ bản của user
+    return {
+        "id": updated_user.id,
+        "username": updated_user.username,
+        "email": updated_user.email,
+        "usertype": updated_user.usertype,
+        "active": updated_user.active,
+        "credits": updated_user.credits,
+        "message": "Đặt lại mật khẩu thành công"
+    }
 
 # API Tìm kiếm tài khoản
 @router.post("/search", response_model=List[UserResponse])

@@ -1,6 +1,8 @@
 # Bỏ qua file môi trường
 .env
 
+audio_uploads/
+temp/
 # Bỏ qua thư mục môi trường ảo
 .venv/
 
@@ -43,3 +45,6 @@ pytest_cache/
 
 # Docker-specific
 *.pid
+
+# Added from the code block
+data/voice_profiles/user_5/profile_3/con.wav
